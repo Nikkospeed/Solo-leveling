@@ -17,7 +17,7 @@
 <style>
 :root{
   --bg:#e8f0fa;--panel:#f6faff;--ink:#0c1d3a;--muted:#4c6488;--line:#86b0dc;
-  --glow:#1d78cf;--glow-soft:rgba(29,120,207,.13);--gold:#9a6400;--red:#bf1f2c;--track:#d2e1f2;--ok:#0f8a5f;
+  --glow:#1d78cf;--glow-soft:rgba(29,120,207,.13);--gold:#9a6400;--red:#bf1f2c;--track:#d2e1f2;--ok:#0f8a5f;--violet:#6a4bd6;
   color-scheme:light;
   box-sizing:border-box;
   padding-top:env(safe-area-inset-top,0px);
@@ -26,13 +26,13 @@
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
     --bg:#040a18;--panel:#08142c;--ink:#d6eaff;--muted:#7b98c0;--line:#2a64a6;
-    --glow:#6fd0ff;--glow-soft:rgba(111,208,255,.11);--gold:#ffc94d;--red:#ff5263;--track:#12244a;--ok:#4fe0a6;
+    --glow:#6fd0ff;--glow-soft:rgba(111,208,255,.11);--gold:#ffc94d;--red:#ff5263;--track:#12244a;--ok:#4fe0a6;--violet:#b9a2ff;
     color-scheme:dark;
   }
 }
 :root[data-theme="dark"]{
   --bg:#040a18;--panel:#08142c;--ink:#d6eaff;--muted:#7b98c0;--line:#2a64a6;
-  --glow:#6fd0ff;--glow-soft:rgba(111,208,255,.11);--gold:#ffc94d;--red:#ff5263;--track:#12244a;--ok:#4fe0a6;
+  --glow:#6fd0ff;--glow-soft:rgba(111,208,255,.11);--gold:#ffc94d;--red:#ff5263;--track:#12244a;--ok:#4fe0a6;--violet:#b9a2ff;
   color-scheme:dark;
 }
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
@@ -115,7 +115,15 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .day.fail{background:transparent;border-color:var(--red);background-image:linear-gradient(135deg,transparent 45%,var(--red) 45%,var(--red) 55%,transparent 55%)}
 .day.today{outline:1px solid var(--ink);outline-offset:1px}
 .loglegend{display:flex;justify-content:space-between;font-size:.8rem;color:var(--muted);margin-top:6px}
-.streaks{display:flex;gap:28px;margin-top:14px}
+.streaks{display:flex;flex-wrap:wrap;gap:12px 24px;margin-top:14px}
+.stag{display:inline-block;font-size:.75rem;font-weight:600;padding:1px 7px;border:1px solid currentColor;line-height:1.5}
+.t-treat{color:var(--gold)}.t-quick{color:var(--glow)}.t-grind{color:var(--ink)}.t-brutal{color:var(--red)}.t-challenge{color:var(--ok)}.t-mind{color:var(--violet)}
+.stext{grid-column:1/-1;font-size:1.02rem;font-weight:500}
+.q.sq.done .name::before{content:none}
+.q.sq.done .stext::before{content:"✓ ";color:var(--ok);font-weight:700}
+.q.skipped{opacity:.5}
+.q.skipped .stext{text-decoration:line-through}
+.veil .stag{margin-bottom:2px}
 .streaks b{display:block;font-size:1.8rem;line-height:1;color:var(--glow)}
 .streaks span{font-size:.85rem;color:var(--muted)}
 .foot{text-align:center;font-size:.8rem;color:var(--muted)}
@@ -185,6 +193,7 @@ function defaults(){
   return {v:1,name:"Player",date:today(),level:1,xp:0,points:0,
     stats:{str:10,vit:10,agi:10,int:10,sen:10},streak:0,best:0,rewarded:false,history:{},
     quests:[mk("Push-ups",100,"reps","str"),mk("Sit-ups",100,"reps","vit"),mk("Squats",100,"reps","agi"),mk("Running",10,"km","agi")],
+    surprises:[],surpriseDate:"",recent:[],surpriseDone:0,
     updatedAt:0};
 }
 function normalize(r){
@@ -192,6 +201,9 @@ function normalize(r){
   const s=Object.assign(d,r||{});
   s.stats=Object.assign(defaults().stats,s.stats||{});
   s.history=s.history||{};
+  if(!Array.isArray(s.surprises)) s.surprises=[];
+  if(!Array.isArray(s.recent)) s.recent=[];
+  s.surpriseDone=Number(s.surpriseDone)||0;
   s.quests=Array.isArray(s.quests)?s.quests.map(q=>Object.assign({id:uid6(),name:"Quest",target:1,unit:"",stat:"str",progress:0,claimed:false},q)):[];
   return s;
 }
@@ -200,6 +212,7 @@ let fresh=false;
 let S;
 try{const raw=localStorage.getItem(KEY);S=raw?normalize(JSON.parse(raw)):null}catch(e){S=null}
 if(!S){S=defaults();fresh=true}
+const firstRun=fresh;
 
 let editing=false;
 const queue=[];
@@ -228,6 +241,7 @@ function rollover(){
       "A new quest has been issued. Finish it before midnight."]});
   }
   S.date=t; S.rewarded=false;
+  scheduleSurprises();
   S.quests.forEach(q=>{q.progress=0;q.claimed=false});
   const cutoff=addDays(t,-90);
   Object.keys(S.history).forEach(k=>{if(k<cutoff)delete S.history[k]});
@@ -262,6 +276,145 @@ function bump(id,amt){
   claimCheck(q); allCheck(); save(); render(); showNext();
 }
 function finish(id){const q=S.quests.find(x=>x.id===id); if(q) bump(id,q.target-q.progress)}
+
+/* ---------- surprise quests ---------- */
+const TIERS={
+  treat:{label:"Treat",xp:10,stat:"vit",w:15},
+  quick:{label:"Quick",xp:15,stat:"agi",w:24},
+  grind:{label:"Grind",xp:30,stat:"str",w:20},
+  brutal:{label:"Brutal",xp:60,stat:"str",w:10},
+  challenge:{label:"Challenge",xp:40,stat:"sen",w:19},
+  mind:{label:"Mind",xp:25,stat:"int",w:12}
+};
+const POOL={
+treat:[
+"Drink a soda you like","Eat your favorite snack, no guilt","Take a 20-minute nap","Watch one episode of a show you love",
+"Cook or order your favorite meal","Take a long, hot shower","Listen to a favorite album start to finish","Buy yourself a small treat",
+"Play a video game for 30 minutes","Eat some ice cream","Spend 15 minutes doing absolutely nothing","Get yourself a fancy coffee or tea",
+"Watch a movie tonight","Put on your comfiest clothes and chill for an hour","Have a piece of chocolate","Watch a video that always makes you laugh",
+"Sit in the sun for 10 minutes","Make yourself a proper breakfast","Go to bed 30 minutes earlier tonight","Play your favorite song loud",
+"Have dessert today","Have a pizza night","Light a candle and relax for 20 minutes","Take a bath","Eat a meal slowly with no screens",
+"Call it a day early and rest","Make a hot chocolate","Reread a book you love","Get some fresh pastry from a bakery","Lie down and stretch out for 10 minutes"
+],
+quick:[
+"20 push-ups right now","30 squats right now","Plank for 60 seconds","50 jumping jacks","Drink two full glasses of water",
+"20 lunges on each leg","Wall sit for 60 seconds","Hold a deep squat for 60 seconds","15 burpees","Stretch for 5 minutes",
+"Walk 2,000 steps","Take the stairs every time today","30 sit-ups","40 mountain climbers","10 slow push-ups, 3 seconds down",
+"Stay standing for the next hour","Tidy your room for 10 minutes","Make your bed perfectly","Do the dishes right now","Clean out one drawer",
+"Put your phone in another room for 30 minutes","30 calf raises","20 glute bridges","Jump in place for 2 minutes","Shadowbox for 3 minutes",
+"Go outside for 10 minutes of fresh air","Delete 100 photos you don’t need","Reply to every message you’ve been ignoring","Take out the trash now",
+"Fold and put away your clean clothes","25 crunches and 25 leg raises","Do 10 push-ups every hour for the next 3 hours","Eat a piece of fruit",
+"Clean your phone screen and your glasses","Walk around the block","Do 3 rounds of 10 squat jumps","Hold a side plank for 30 seconds each side"
+],
+grind:[
+"Run 3 km","50 push-ups, any sets","100 squats, any sets","Walk 10,000 steps today","Plank for 3 minutes total",
+"Do a 20-minute workout video","Go for a 30-minute bike ride","Swim for 20 minutes","200 jumping jacks","50 burpees, any sets",
+"5 rounds: 10 push-ups, 15 squats, 20 sit-ups","Clean your whole room","Deep clean the bathroom","Do all your laundry today","Meal prep tomorrow’s lunch",
+"Go on a 45-minute walk","Stretch for 20 minutes","100 lunges total","Do 30 minutes of yoga","Run up and down the stairs 10 times",
+"Climb 30 flights of stairs today","150 sit-ups","Wall sit for 5 minutes total","3 sets of max push-ups","Sprint 10 times for 50 meters",
+"Go on a hike somewhere new","Organize your whole desk","Cook a full meal from scratch","Go to the gym today","Jog for 25 minutes",
+"Clean out your fridge","Vacuum your whole place","100 push-ups spread across the day","Do a 30-minute core workout","Walk everywhere today, no rides"
+],
+brutal:[
+"100 burpees","Run 10 km","2-minute cold shower","200 push-ups today","300 squats today","No phone for 3 hours",
+"No social media for the rest of the day","Plank for 5 minutes total, max 3 breaks","Wake up at 6:00 tomorrow","No sugar for the rest of the day",
+"Walk 20,000 steps today","Run 5 km without stopping","Wall sit for 3 minutes straight","500 jumping jacks","100 push-ups in under 10 minutes",
+"Do a full 1-hour workout","No screens for the last hour before bed","End your shower with 60 seconds of ice-cold water","Climb 50 flights of stairs today",
+"Do the chore you’ve been avoiding for weeks","No music, podcasts or videos for the rest of the day","1,000 total reps of anything today",
+"5 burpees every time you open social media today","Beat your best 5 km time","Only drink water for the rest of the day","Hold a plank for 2 minutes straight",
+"10 rounds: 10 burpees, 20 squats","Delete the app that wastes most of your time","Run 3 km, then do 100 squats","No games for the rest of the day"
+],
+challenge:[
+"Ask a friend to hang out","Call a family member just to talk","Compliment a stranger","Text someone you haven’t talked to in months",
+"Start a conversation with someone new","Tell someone you appreciate them","Invite someone to work out with you","Ask someone for advice on something you’re stuck on",
+"Make plans for this weekend","Send a voice message instead of a text","Thank someone who helped you recently","Eat a meal with someone instead of alone",
+"Call a friend instead of texting","Ask someone how they’re really doing","Introduce two friends who would get along","Go somewhere new in your town",
+"Try a food you’ve never eaten","Do something that scares you a little","Sing loudly in the shower","Plan a surprise for someone",
+"Help someone without being asked","Make someone laugh today","Join a group activity or class","Talk to a neighbor","Write a handwritten note to someone",
+"Apologize to someone you owe an apology","Take a photo with a friend","Leave a nice review for a local place you like",
+"Go somewhere alone: a café, cinema or museum","Tell someone one of your goals out loud","Cook something and share it","Ask a friend to set you a challenge",
+"Give someone a genuine compliment about their work","Reconnect with an old friend","Offer to help a family member with something","Say yes to the next plan someone suggests",
+"Ask someone out for coffee","Organize a game night","Volunteer an hour of your time"
+],
+mind:[
+"Read 20 pages","Write down 3 things you’re grateful for","Meditate for 10 minutes","Learn 10 words in a new language","Watch a documentary",
+"Journal for 10 minutes","Learn how something you use every day works","Plan tomorrow in detail tonight","Solve a puzzle or a sudoku",
+"Write down your goals for this month","Practice a new skill for 30 minutes","Read about a random topic you know nothing about",
+"Spend 20 minutes on a hobby you’ve neglected","Practice an instrument for 20 minutes","Write a short story or poem","Learn 5 facts about a country you know little about",
+"Review your spending this week","Do 5 minutes of slow breathing","Draw something for 15 minutes","Listen to an educational podcast",
+"Write a letter to your future self","Learn a card trick","Study for 45 minutes with no distractions","Set one goal for next week and write it down",
+"Learn to cook one new thing","Come up with 10 ideas for a project","Teach someone something you know","Clear your mind with a 15-minute walk, no phone",
+"Learn the basics of chess or a new strategy game","Write down what went well this week"
+]
+};
+
+function pickSurprise(){
+  const tot=Object.values(TIERS).reduce((a,t)=>a+t.w,0);
+  let r=Math.random()*tot, tier="quick";
+  for(const k in TIERS){ r-=TIERS[k].w; if(r<=0){tier=k;break} }
+  let opts=POOL[tier].filter(t=>!S.recent.includes(t));
+  if(!opts.length) opts=POOL[tier];
+  const text=opts[Math.floor(Math.random()*opts.length)];
+  S.recent.push(text); if(S.recent.length>90) S.recent=S.recent.slice(-90);
+  return {id:uid6(),text,tier,stat:TIERS[tier].stat,xp:TIERS[tier].xp,status:"pending",at:0};
+}
+function scheduleSurprises(){
+  if(S.surpriseDate===S.date) return;
+  S.surpriseDate=S.date; S.surprises=[];
+  const r=Math.random();
+  const n=r<.15?0:r<.55?1:r<.85?2:3;
+  const day=parse(S.date);
+  const start=new Date(day).setHours(8,0,0,0), end=new Date(day).setHours(21,30,0,0), last=new Date(day).setHours(23,15,0,0);
+  const now=Date.now();
+  for(let i=0;i<n;i++){
+    let at=start+Math.random()*(end-start);
+    if(at<now) at=now+(5+Math.random()*85)*60000;
+    if(at>last) continue;
+    const s=pickSurprise(); s.at=Math.round(at); S.surprises.push(s);
+  }
+  S.surprises.sort((a,b)=>a.at-b.at);
+  save();
+}
+function checkSurprises(){
+  const now=Date.now(); let changed=false;
+  S.surprises.forEach(s=>{
+    if(s.status==="pending"&&s.at<=now){
+      s.status="active"; changed=true;
+      const t=TIERS[s.tier]||TIERS.quick;
+      queue.push({tone:s.tier==="brutal"?"red":s.tier==="treat"?"gold":"",sigil:"?",title:"Surprise quest",
+        lines:[`<span class="stag t-${s.tier}">${t.label}</span>`,`<span class="big">${esc(s.text)}</span>`,
+          `Reward: +${s.xp} XP, ${statName(s.stat)} +1`,"Finish it before midnight."],
+        buttons:`<button class="ok" data-v="ok">Accept</button>`});
+    }
+  });
+  if(changed){save();render();showNext()}
+}
+function surpriseAct(id,done){
+  const s=S.surprises.find(x=>x.id===id); if(!s||s.status!=="active") return;
+  if(done){
+    s.status="done"; S.surpriseDone=(S.surpriseDone||0)+1; S.stats[s.stat]=(S.stats[s.stat]||0)+1;
+    toast(`Surprise complete: +${s.xp} XP, ${statName(s.stat)} +1`);
+    gainXp(s.xp);
+  }else{
+    s.status="skipped";
+  }
+  save(); render(); showNext();
+}
+function surpriseWin(){
+  const shown=S.surprises.filter(s=>s.status!=="pending");
+  const body=!shown.length
+    ? `<p class="empty">Nothing yet. Surprise quests can appear at any time, so stay ready.</p>`
+    : `<ul class="quests">${shown.map(s=>{const t=TIERS[s.tier]||TIERS.quick; return `<li class="q sq${s.status==="done"?" done":""}${s.status==="skipped"?" skipped":""}">
+        <div class="name"><span class="stag t-${s.tier}">${t.label}</span></div>
+        <div class="count">${s.status==="done"?"Done":s.status==="skipped"?"Skipped":`+${s.xp} XP`}</div>
+        <div class="stext">${esc(s.text)}</div>
+        ${s.status==="active"?`<div class="ctrls"><button data-act="sskip" data-id="${s.id}">Skip</button><button class="fin" data-act="sdone" data-id="${s.id}">Complete</button></div>`:""}
+      </li>`}).join("")}</ul>`;
+  return `<section class="win" aria-label="Surprise quests">
+    <div class="win-head"><div class="sigil"><span>?</span></div><h2 class="grow">Surprise quests</h2></div>
+    ${body}
+  </section>`;
+}
 
 /* ---------- UI ---------- */
 const app=document.getElementById("app");
@@ -341,12 +494,12 @@ function logWin(){
     <div class="win-head"><div class="sigil"><span>≡</span></div><h2 class="grow">Record</h2></div>
     <div class="strip">${days.map(d=>{const h=S.history[d];return `<div class="day ${h||""}${d===t?" today":""}" title="${d}: ${h==="done"?"complete":h==="fail"?"failed":d===t?"in progress":"no record"}"></div>`}).join("")}</div>
     <div class="loglegend"><span>14 days ago</span><span>Today</span></div>
-    <div class="streaks"><div><b>${S.streak}</b><span>Current streak</span></div><div><b>${S.best}</b><span>Best streak</span></div></div>
+    <div class="streaks"><div><b>${S.streak}</b><span>Current streak</span></div><div><b>${S.best}</b><span>Best streak</span></div><div><b>${S.surpriseDone||0}</b><span>Surprises done</span></div></div>
   </section>`;
 }
 
 function render(){
-  app.innerHTML=statusWin()+questWin()+logWin()+`<div class="foot"><button data-act="reset">Reset all progress</button></div>`;
+  app.innerHTML=statusWin()+questWin()+surpriseWin()+logWin()+`<div class="foot"><button data-act="reset">Reset all progress</button></div>`;
 }
 
 app.addEventListener("click",e=>{
@@ -364,6 +517,8 @@ app.addEventListener("click",e=>{
   else if(a==="del"){S.quests=S.quests.filter(q=>q.id!==b.dataset.id);save();render()}
   else if(a==="rename") rename();
   else if(a==="reset") confirmReset();
+  else if(a==="sdone") surpriseAct(b.dataset.id,true);
+  else if(a==="sskip") surpriseAct(b.dataset.id,false);
 });
 app.addEventListener("change",e=>{
   const row=e.target.closest(".erow"); if(!row) return;
@@ -400,7 +555,7 @@ function rename(){
 function confirmReset(){
   queue.unshift({tone:"red",sigil:"!",title:"Reset all progress?",lines:["Your level, stats, streaks and tasks go back to the start. This can’t be undone."],
     buttons:`<button class="ok" data-v="no" style="margin-right:8px">Keep progress</button><button class="ok" data-v="yes">Reset</button>`,
-    onClose:v=>{ if(v==="yes"){S=defaults();editing=false;save();render();toast("Progress reset")} }});
+    onClose:v=>{ if(v==="yes"){S=defaults();editing=false;scheduleSurprises();save();render();toast("Progress reset")} }});
   showNext();
 }
 
@@ -409,15 +564,16 @@ const tEl=document.getElementById("toast"); let tT;
 function toast(m){tEl.textContent=m;tEl.classList.add("on");clearTimeout(tT);tT=setTimeout(()=>tEl.classList.remove("on"),2200)}
 
 /* ---------- clock ---------- */
-rollover(); render(); showNext();
+rollover(); scheduleSurprises(); checkSurprises(); render(); showNext();
 setInterval(()=>{
-  if(S.date!==today()){rollover();render();showNext();return}
+  if(S.date!==today()){rollover();checkSurprises();render();showNext();return}
+  checkSurprises();
   const el=document.getElementById("timer"); if(el) el.textContent=countdown();
 },1000);
 
-if(fresh){
+if(firstRun){
   queue.push({sigil:"!",title:"You’ve been chosen as a player",
-    lines:["A daily quest will appear every day at midnight.","Finish every task to earn XP, raise your stats and keep your streak.","Leave it unfinished and a penalty follows."],
+    lines:["A daily quest will appear every day at midnight.","Finish every task to earn XP, raise your stats and keep your streak.","Leave it unfinished and a penalty follows.","Watch out: surprise quests can appear at any time."],
     buttons:`<button class="ok" data-v="ok">Accept</button>`});
   showNext();
 }
